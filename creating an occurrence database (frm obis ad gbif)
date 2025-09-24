@@ -8,7 +8,7 @@ library(purrr)
 #import the pccurrences from obis
 
 # Define base folder
-folder_path <- "C:/Users/elili/Desktop/smallpelloccurrences/obis"
+folder_path <- "C:/Users/x/smallpelloccurrences/obis"
 
 # Find all .tsv files (recursively, including subfolders)
 tsv_files <- list.files(folder_path, pattern = "\\.tsv$", full.names = TRUE, recursive = TRUE)
@@ -60,7 +60,7 @@ rough_obis %>%
 #import from gbif
 
 #import all dowloaded csv files from GBIF
-file_paths <- list.files(path = "C:/Users/elili/Desktop/smallpelloccurrences/gbif", pattern = "*.csv", full.names = TRUE)
+file_paths <- list.files(path = "C:/Users/x/gbif", pattern = "*.csv", full.names = TRUE)
 data_list <- lapply(file_paths, read_delim, delim = "\t", escape_double = FALSE,  trim_ws = TRUE)
 
 #keep only data columns of interest, merge all files into one data frame
@@ -104,3 +104,13 @@ df <- unique(df)
 
 #replace space in species names by underscore for practicality
 df$species <- gsub(" ", "_", df$species)
+
+#filter out for land occurrences, using a marine environment raster 
+file_path <- "C:/Users/elili/Downloads/wc2.1_30s_bioc_INM-CM5-0_ssp585_2061-2080.tif"
+oceanrast <- raster(file_path)
+oceanrast <- terra::rast(oceanrast)
+extracted_values <- extract(oceanrast, cbind(df$lon, df$lat))
+df <- df[extracted_values != 0, ]
+
+write.csv(df, "C:/Users/x/smallpelloccdf.csv", row.names = FALSE)
+
