@@ -1,0 +1,17 @@
+library(ggplot2)
+library(maps)
+
+world <- map_data("world")
+
+ggplot() +
+  geom_polygon(data = world,
+               aes(x = long, y = lat, group = group),
+               fill = "grey90", color = "grey40") +
+  geom_point(data = Xxx_xxx,
+             aes(x = lon, y = lat),
+             color = "red", size = 2) +
+  coord_quickmap() +
+  labs(title = "Occurrences of Xxx_xxx",
+       x = "Longitude",
+       y = "Latitude") +
+  theme_minimal()
