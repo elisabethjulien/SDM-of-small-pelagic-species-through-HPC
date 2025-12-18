@@ -106,7 +106,7 @@ df <- unique(df)
 df$species <- gsub(" ", "_", df$species)
 
 #filter out for land occurrences, using a marine environment raster 
-file_path <- "C:/Users/elili/Downloads/wc2.1_30s_bioc_INM-CM5-0_ssp585_2061-2080.tif"
+file_path <- "C:/Users/x/wc2.1_30s_bioc_INM-CM5-0_ssp585_2061-2080.tif"
 oceanrast <- raster(file_path)
 oceanrast <- terra::rast(oceanrast)
 extracted_values <- extract(oceanrast, cbind(df$lon, df$lat))
