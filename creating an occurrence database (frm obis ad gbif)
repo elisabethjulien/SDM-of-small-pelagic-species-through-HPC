@@ -6,6 +6,14 @@ library(terra)
 library(purrr)
 
 #import the pccurrences from obis
+# unzip 
+folder <- "C:/Users/elili/OneDrive/Desktop/gbifa"
+
+# Get all zip files in the folder
+zip_files <- list.files(folder, pattern = "\\.zip$", full.names = TRUE)
+
+# Unzip each file into the same folder
+lapply(zip_files, unzip, exdir = folder)
 
 # Define base folder
 folder_path <- "C:/Users/x/smallpelloccurrences/obis"
