@@ -13,8 +13,8 @@ plan(multicore, workers = nc)   # use multicore on Linux
 cat("Using", nc, "CPUs\n")
 
 # ---- Input paths ----
-df_path <- "/projects/F202415137CPCAA0/small_pel_geofiltering/smallpelloccdf.csv"
-tif_path <- "/projects/F202415137CPCAA0/small_pel_geofiltering/wc2.1_30s_bioc_INM-CM5-0_ssp585_2061-2080.tif"
+df_path <- "/projects/F202415137CPCAA0/small_pel_geofiltering/all_species_cleaned.csv"
+tif_path <- "/projects/F202415137CPCAA0/small_pel_geofiltering/present.tif"
 
 # ---- Load data ----
 dfsea <- read.csv(df_path)
@@ -48,6 +48,5 @@ filtered_list <- future_lapply(df_list, apply_filter)
 out <- bind_rows(Filter(function(x) inherits(x, "tbl_df"), filtered_list))
 
 write.csv(out,
-          "/projects/F202415137CPCAA0/small_pel_geofiltering/occgeo_filtered.csv",
+          "/projects/F202415137CPCAA0/small_pel_geofiltering/all_species_cleaned_and_geofiltered.csv",
           row.names = FALSE)
-
