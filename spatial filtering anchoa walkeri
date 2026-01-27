@@ -1,0 +1,155 @@
+# ============================================================
+# Spatial filtering of Anchoa walkeri occurrences
+# ============================================================
+
+# -------------------------------
+# 0. Load libraries
+# -------------------------------
+library(sf)
+library(terra)
+library(dplyr)
+library(ggplot2)
+library(maps)
+
+# -------------------------------
+# 1. Read and prepare study area
+# -------------------------------
+
+# Read polygon drawn in QGIS
+anchoa_poly <- st_read(
+  "C:/Users/maria/Documents/anchoa_walkeri.gpkg"
+)
+
+# Merge all polygons into a single M area
+anchoa_M <- st_union(anchoa_poly)
+
+# -------------------------------
+# 2. Load and crop environmental raster
+# -------------------------------
+
+# Bathymetry (NetCDF)
+bathymetry <- rast(
+  "/Users/maria/Downloads/terrain_characteristics_6d78_4f59_9e1f_U1768304713502.nc"
+)
+
+# Convert polygon to terra object
+M_vect <- vect(anchoa_M)
+
+# Crop and mask raster to M area
+bathymetry_M <- bathymetry |>
+  crop(M_vect) |>
+  mask(M_vect)
+
+# -------------------------------
+# 3. Load and clean occurrence data
+# -------------------------------
+
+# Original occurrence table (raw)
+occ_raw <- small_pelagic_occurences_maria
+
+# Split single-column CSV into fields
+occ_split <- do.call(rbind, strsplit(occ_raw[[1]], ","))
+
+occ <- as.data.frame(occ_split)
+names(occ) <- c("species", "lat", "lon")
+
+# Convert coordinates to numeric
+occ$lat <- as.numeric(occ$lat)
+occ$lon <- as.numeric(occ$lon)
+
+# -------------------------------
+# 4. Select species of interest
+# -------------------------------
+
+occ_aw <- occ |> 
+  filter(species == "Anchoa walkeri")
+
+n_before <- nrow(occ_aw)
+
+# Convert to sf points
+occ_aw_sf <- st_as_sf(
+  occ_aw,
+  coords = c("lon", "lat"),
+  crs = 4326
+)
+
+# -------------------------------
+# 5. Spatial filtering using M area
+# -------------------------------
+
+occ_aw_filt <- occ_aw_sf[
+  st_within(occ_aw_sf, anchoa_M, sparse = FALSE),
+]
+
+n_after <- nrow(occ_aw_filt)
+
+cat("Occurrences before filtering:", n_before, "\n")
+cat("Occurrences after filtering :", n_after, "\n")
+cat("Removed                  :", n_before - n_after, "\n")
+
+# -------------------------------
+# 6. Simple world map (after filtering)
+# -------------------------------
+
+world <- map_data("world")
+
+ggplot() +
+  geom_polygon(
+    data = world,
+    aes(x = long, y = lat, group = group),
+    fill = "grey90",
+    color = "grey40"
+  ) +
+  geom_sf(
+    data = occ_aw_filt,
+    color = "red",
+    size = 1.2,
+    alpha = 0.7
+  ) +
+  coord_sf() +
+  theme_minimal() +
+  labs(
+    title = "Occurrences of Anchoa walkeri (after spatial filtering)",
+    x = "Longitude",
+    y = "Latitude"
+  )
+
+# -------------------------------
+# 7. Replace old occurrences in database
+# -------------------------------
+
+# Remove old Anchoa walkeri occurrences
+occ_no_aw <- occ |> 
+  filter(species != "Anchoa walkeri")
+
+# Convert filtered sf points back to table
+coords <- st_coordinates(occ_aw_filt)
+
+occ_aw_new <- occ_aw_filt |>
+  st_drop_geometry() |>
+  mutate(
+    lon = coords[, 1],
+    lat = coords[, 2]
+  ) |>
+  select(species, lat, lon)
+
+# Merge back into full database
+occ_updated <- bind_rows(occ_no_aw, occ_aw_new)
+
+# Final check
+cat(
+  "Final Anchoa walkeri count in database:",
+  sum(occ_updated$species == "Anchoa walkeri"),
+  "\n"
+)
+
+# -------------------------------
+# 8. Save updated occurrence file
+# -------------------------------
+
+write.csv(
+  occ_updated,
+  "C:/Users/maria/Documents/occurrences_UPDATED.csv",
+  row.names = FALSE
+)
+
