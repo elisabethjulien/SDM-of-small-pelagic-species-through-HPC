@@ -1,0 +1,88 @@
+# ============================================================
+# Spatial filtering of occurrences for ALL species (loop)
+# ============================================================
+
+# -------------------------------
+# 0. Load libraries
+# -------------------------------
+library(sf)
+library(terra)
+library(dplyr)
+
+# -------------------------------
+# 1. Paths
+# -------------------------------
+gpkg_dir  <- "C:/Users/elili/Documents/"
+out_dir   <- "C:/Users/elili/Documents/filtered_occurrences/"
+
+dir.create(out_dir, showWarnings = FALSE)
+
+# -------------------------------
+# 2. Load occurrence data ONCE
+# -------------------------------
+occ_raw <- all_species_cleaned_and_geofiltered_1_
+
+# Convert once to sf
+occ_sf <- st_as_sf(
+  occ_raw,
+  coords = c("lon", "lat"),
+  crs = 4326,
+  remove = FALSE
+)
+
+head(occ_sf)
+
+occ_sf <- occ_sf |>
+  mutate(
+    spp_code = paste0(
+      substr(tolower(species), 1, 3), "_",
+      substr(tolower(sub(".*_", "", species)), 1, 3)
+    )
+  )
+
+# -------------------------------
+# 3. List all gpkg files
+# -------------------------------
+gpkg_files <- list.files(
+  gpkg_dir,
+  pattern = "\\.gpkg$",
+  full.names = TRUE
+)
+
+# -------------------------------
+# 4. LOOP over species
+# -------------------------------
+for (gpkg in gpkg_files) {
+  
+  spp_id <- tools::file_path_sans_ext(basename(gpkg))
+  cat("\nProcessing species:", spp_id, "\n")
+  
+  M_poly <- st_read(gpkg, quiet = TRUE) |>
+    st_union()
+  
+  occ_spp <- occ_sf |>
+    filter(spp_code == spp_id)
+  
+  if (nrow(occ_spp) == 0) {
+    cat("  No occurrences found — skipping\n")
+    next
+  }
+  
+  n_before <- nrow(occ_spp)
+  
+  occ_filt <- occ_spp[
+    st_within(occ_spp, M_poly, sparse = FALSE),
+  ]
+  
+  n_after <- nrow(occ_filt)
+  
+  cat("  Before:", n_before,
+      "| After:", n_after,
+      "| Removed:", n_before - n_after, "\n")
+  
+  write.csv(
+    st_drop_geometry(occ_filt),
+    file.path(out_dir, paste0(spp_id, "_occ_filtered.csv")),
+    row.names = FALSE
+  )
+}
