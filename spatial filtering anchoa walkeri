@@ -47,7 +47,7 @@ bathymetry_M <- bathymetry |>
 # Original occurrence table (raw)
 occ_raw <- small_pelagic_occurences_maria
 
-# Split single-column CSV into fields
+# Split single-column CSV into fields in case that you have two polygons
 occ_split <- do.call(rbind, strsplit(occ_raw[[1]], ","))
 
 occ <- as.data.frame(occ_split)
