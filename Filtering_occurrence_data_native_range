@@ -18,9 +18,14 @@ out_dir   <- "C:/Users/elili/Documents/filtered_occurrences/"
 dir.create(out_dir, showWarnings = FALSE)
 
 # -------------------------------
+# 0b. Disable s2 geometry engine
+# -------------------------------
+sf::sf_use_s2(FALSE)
+
+# -------------------------------
 # 2. Load occurrence data ONCE
 # -------------------------------
-occ_raw <- all_species_cleaned_and_geofiltered_1_
+occ_raw <- all_species_cleaned_and_geofiltered
 
 # Convert once to sf
 occ_sf <- st_as_sf(
@@ -58,6 +63,7 @@ for (gpkg in gpkg_files) {
   cat("\nProcessing species:", spp_id, "\n")
   
   M_poly <- st_read(gpkg, quiet = TRUE) |>
+    st_make_valid() |>
     st_union()
   
   occ_spp <- occ_sf |>
