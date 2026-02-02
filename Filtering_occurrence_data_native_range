@@ -1,5 +1,8 @@
 # ============================================================
 # Spatial filtering of occurrences for ALL species (loop)
+# + auto-rename gpkg files to lowercase
+# + FIX invalid geometries
+# + extract min/max from ONE global NetCDF raster
 # ============================================================
 
 # -------------------------------
@@ -10,32 +13,65 @@ library(terra)
 library(dplyr)
 
 # -------------------------------
-# 1. Paths
-# -------------------------------
-gpkg_dir  <- "C:/Users/elili/Documents/"
-out_dir   <- "C:/Users/elili/Documents/filtered_occurrences/"
-
-dir.create(out_dir, showWarnings = FALSE)
-
-# -------------------------------
-# 0b. Disable s2 geometry engine
+# 0b. Disable s2 (required)
 # -------------------------------
 sf::sf_use_s2(FALSE)
 
 # -------------------------------
-# 2. Load occurrence data ONCE
+# 1. Paths
 # -------------------------------
-occ_raw <- all_species_cleaned_and_geofiltered
+gpkg_dir   <- "C:/Users/elili/Documents/"
+raster_dir <- "C:/Users/elili/Downloads/bathymetry.nc"
+out_dir    <- "C:/Users/elili/Documents/filtered_occurrences/"
 
-# Convert once to sf
+dir.create(out_dir, showWarnings = FALSE)
+
+# -------------------------------
+# 2. AUTO-RENAME GPKG FILES TO LOWERCASE
+# -------------------------------
+rename_to_lowercase <- function(files) {
+  for (f in files) {
+    f_lower <- file.path(dirname(f), tolower(basename(f)))
+    if (f != f_lower && !file.exists(f_lower)) {
+      file.rename(f, f_lower)
+      cat("Renamed:", basename(f), "→", basename(f_lower), "\n")
+    }
+  }
+}
+
+gpkg_files_all <- list.files(gpkg_dir, pattern = "\\.gpkg$", full.names = TRUE)
+rename_to_lowercase(gpkg_files_all)
+
+# -------------------------------
+# 3. Reload gpkg list
+# -------------------------------
+gpkg_files <- list.files(gpkg_dir, pattern = "\\.gpkg$", full.names = TRUE)
+
+# -------------------------------
+# 4. Load occurrence data ONCE
+# -------------------------------
+occ_raw <- all_species_cleaned_and_geofiltered_3_by
+
+
+library(dplyr)
+
+occ_raw |>
+  count(species, name = "n") |>
+  print(n = 110)
+
+occ_raw |>
+  count(species, name = "n") |>
+  filter(n >= 20) |>
+  print(n = 110)
+
+
+
 occ_sf <- st_as_sf(
   occ_raw,
   coords = c("lon", "lat"),
   crs = 4326,
   remove = FALSE
 )
-
-head(occ_sf)
 
 occ_sf <- occ_sf |>
   mutate(
@@ -46,26 +82,43 @@ occ_sf <- occ_sf |>
   )
 
 # -------------------------------
-# 3. List all gpkg files
+# 5. Load GLOBAL raster ONCE
 # -------------------------------
-gpkg_files <- list.files(
-  gpkg_dir,
-  pattern = "\\.gpkg$",
-  full.names = TRUE
+r_global <- rast(raster_dir)[[1]]  # first layer only
+
+# -------------------------------
+# 6. Summary table
+# -------------------------------
+summary_df <- data.frame(
+  spp_id = character(),
+  n_before = integer(),
+  n_after = integer(),
+  raster_min = numeric(),
+  raster_max = numeric(),
+  stringsAsFactors = FALSE
 )
 
 # -------------------------------
-# 4. LOOP over species
+# 7. LOOP over species
 # -------------------------------
+
+occ_sf <- occ_sf |>
+  mutate(spp_code = tolower(spp_code))
+
 for (gpkg in gpkg_files) {
   
-  spp_id <- tools::file_path_sans_ext(basename(gpkg))
+  # ---- Species ID (FIX: force lowercase)
+  spp_id <- tools::file_path_sans_ext(basename(gpkg)) |>
+    tolower()
+  
   cat("\nProcessing species:", spp_id, "\n")
   
+  # ---- M polygon (fixed)
   M_poly <- st_read(gpkg, quiet = TRUE) |>
     st_make_valid() |>
     st_union()
   
+  # ---- Occurrences
   occ_spp <- occ_sf |>
     filter(spp_code == spp_id)
   
@@ -82,13 +135,100 @@ for (gpkg in gpkg_files) {
   
   n_after <- nrow(occ_filt)
   
-  cat("  Before:", n_before,
-      "| After:", n_after,
-      "| Removed:", n_before - n_after, "\n")
+  # ---- Raster crop + mask (ONE raster)
+  r_M <- mask(
+    crop(r_global, vect(M_poly)),
+    vect(M_poly)
+  )
   
+  r_min <- global(r_M, "min", na.rm = TRUE)[1, 1]
+  r_max <- global(r_M, "max", na.rm = TRUE)[1, 1]
+  
+  cat(
+    "  Before:", n_before,
+    "| After:", n_after,
+    "| Removed:", n_before - n_after,
+    "| Raster min:", r_min,
+    "| Raster max:", r_max, "\n"
+  )
+  
+  # ---- Save filtered occurrences
   write.csv(
     st_drop_geometry(occ_filt),
     file.path(out_dir, paste0(spp_id, "_occ_filtered.csv")),
     row.names = FALSE
   )
+  
+  # ---- Append summary
+  summary_df <- rbind(
+    summary_df,
+    data.frame(
+      spp_id = spp_id,
+      n_before = n_before,
+      n_after = n_after,
+      raster_min = r_min,
+      raster_max = r_max
+    )
+  )
 }
+
+# -------------------------------
+# 8. Write summary table
+# -------------------------------
+write.csv(
+  summary_df,
+  file.path(out_dir, "species_raster_min_max_summary.csv"),
+  row.names = FALSE
+)
+
+summary_df
+
+
+# Set the folder path
+folder_path <- "C:/Users/elili/Documents/filtered_occurrences"
+
+# Get a list of all CSV files in the folder
+csv_files <- list.files(path = folder_path, pattern = "\\.csv$", full.names = TRUE)
+
+# Read all CSV files into a list of data frames
+list_of_dfs <- lapply(csv_files, read.csv)
+
+# Optional: Keep only specific columns (species, lat, lon)
+list_of_dfs <- lapply(list_of_dfs, function(df) df[, c("species", "lat", "lon", "spp_code")])
+
+# Merge all data frames row-wise
+merged_df <- do.call(rbind, list_of_dfs)
+
+# View the first few rows
+head(merged_df)
+
+#######checking if any spp are missing 
+occ_raw_20 <- occ_raw |>
+  group_by(species) |>
+  filter(n() >= 20) |>
+  ungroup()
+
+spp_occ20 <- unique(occ_raw_20$species)
+spp_merged <- unique(merged_df$species)
+
+missing_spp <- setdiff(spp_occ20, spp_merged)
+
+head(missing_spp)
+###Only Sardinops_sagax, as we didnt filter it (due to global distributio )
+
+# Filter rows from occ_raw
+sardi_rows <- occ_raw[occ_raw$species == "Sardinops_sagax", ]
+
+# Append to merged_df
+merged_df <- rbind(merged_df, sardi_rows)
+
+merged_df$spp_code=NULL
+# Check result
+head(merged_df)
+
+write.csv(
+  merged_df,
+  file.path(out_dir, "all_species_nativerange_filtered.csv"),
+  row.names = FALSE
+)
+
