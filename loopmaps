@@ -1,4 +1,4 @@
-# Loop Map
+native_range <- st_read("C:/Users/marta/Desktop/XXX.csv")
 
 # upload libraries
 
@@ -11,99 +11,81 @@ library(maps)
 # upload world map
 world <- map_data("world")
 
-# species_list is your species database in my case: small_pelagic_marine2$species
-
-species_list <- sort(unique(small_pelagic_marine2$species))
-
-species_list
 
 plot_species_map <- function(df, sp_name) {
-
   
-
+  
+  
   ggplot() +
-
+    
     geom_polygon(
-
+      
       data = world,
-
+      
       aes(x = long, y = lat, group = group),
-
+      
       fill = "grey90",
-
+      
       color = "grey40"
-
+      
     ) +
-
+    
     geom_point(
-
+      
       data = df[df$species == sp_name, ],
-
+      
       aes(x = lon, y = lat),
-
+      
       color = "red",
-
+      
       size = 1.2,
-
+      
       alpha = 0.7
-
+      
     ) +
-
+    
     coord_quickmap() +
-
+    
     theme_minimal() +
-
+    
     labs(
-
+      
       title = paste("Occurrences of", sp_name),
-
+      
       x = "Longitude",
-
+      
       y = "Latitude"
-
+      
     )
-
+  
 }
 
-for (sp in species_list) {
+native_range$lat <- as.numeric(native_range$lat)
+native_range$lon <- as.numeric(native_range$lon)
 
+species_list <- sort(unique(native_range$species))  # lista correta do dataset
+
+plot_all_species <- function(df) {
   
-
-  cat("\n-----------------------------\n")
-
-  cat("Species:", sp, "\n")
-
-  
-
-  sp_data <- small_pelagic_final %>%
-
-    filter(species == sp)
-
-  
-
-  n_occ <- nrow(sp_data)
-
-  lat_min <- min(sp_data$lat, na.rm = TRUE)
-
-  lat_max <- max(sp_data$lat, na.rm = TRUE)
-
-  n_equatorial <- sum(abs(sp_data$lat) < 1, na.rm = TRUE)
-
-  
-
-  cat("Number of occurrences:", n_occ, "\n")
-
-  cat("Latitude range:", round(lat_min, 2), "to", round(lat_max, 2), "\n")
-
-  cat("Equatorial points (|lat| < 1):", n_equatorial, "\n")
-
-  
-
-  print(
-
-    plot_species_map(small_pelagic_final, sp)
-
-  )
-
+  for (sp_name in species_list) {
+    
+    sp_data <- df %>% filter(species == sp_name)
+    
+    if(nrow(sp_data) == 0) next  # pular espécies sem pontos
+    
+    n_occ <- nrow(sp_data)
+    lat_min <- min(sp_data$lat, na.rm = TRUE)
+    lat_max <- max(sp_data$lat, na.rm = TRUE)
+    n_equatorial <- sum(abs(sp_data$lat) < 1, na.rm = TRUE)
+    
+    cat("\n-----------------------------\n")
+    cat("Species:", sp_name, "\n")
+    cat("Number of occurrences:", n_occ, "\n")
+    cat("Latitude range:", round(lat_min, 2), "to", round(lat_max, 2), "\n")
+    cat("Equatorial points (|lat| < 1):", n_equatorial, "\n")
+    
+    print(plot_species_map(df, sp_name))
+  }
 }
 
+plot_all_species(native_range)
