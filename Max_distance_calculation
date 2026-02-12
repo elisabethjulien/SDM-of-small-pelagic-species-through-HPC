@@ -1,0 +1,44 @@
+
+library(dplyr)
+library(sf)
+library(geosphere)
+
+df<-all_species_nativerange_filtered
+unique(df$species)
+
+df_artificial_points <- df[df$species %in% c(
+  "Anchoa_hepsetus",
+  "Anchoa_spinifer",
+  "Chirocentrodon_bleekerianus",
+  "Dussumieria_acuta",
+  "Clupea_pallasii",
+  "Engraulis_eurystole",
+  "Etrumeus_sadina",
+  "Sardinella_brasiliensis",
+  "Thryssa_dussumieri"
+), ]
+
+unique(df_artificial_points$species)
+
+max_dist_fast <- function(data) {
+  
+  if (nrow(data) < 2) return(0)
+  
+  # Convert to sf
+  pts <- st_as_sf(data, coords = c("lon", "lat"), crs = 4326)
+  
+  # Convex hull
+  hull <- st_convex_hull(st_union(pts))
+  
+  # Extract hull vertices
+  hull_coords <- st_coordinates(hull)[, 1:2]
+  
+  # Compute pairwise distances only on hull
+  max(distm(hull_coords, fun = distHaversine)) / 1000
+}
+
+max_distances <- df_artificial_points %>%
+  group_by(species) %>%
+  group_modify(~ tibble(max_distance_km = max_dist_fast(.x)))
+
+max_distances
