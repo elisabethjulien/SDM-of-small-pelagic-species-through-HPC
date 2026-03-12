@@ -1,0 +1,191 @@
+#!/usr/bin/env Rscript
+###############################################################################
+# HPC Species Distribution Modelling – ALL SPECIES
+# Presence + Background (10,000 points within calibration buffer)
+###############################################################################
+
+cat("Using sdm version:", paste(packageVersion("sdm")), "\n")
+
+library(terra)
+library(sdm)
+library(flexsdm)
+library(dplyr)
+
+installAll()
+
+###############################################################################
+# 1. DEFINE PATHS
+###############################################################################
+
+occ_file <- "/projects/F202415137CPCAA0/small_pel_geofiltering/modelling_all_spp/occurrence_dfs/ap_species.csv"
+tif_path <- "/projects/F202415137CPCAA0/small_pel_geofiltering/present.tif"
+
+out_path <- "/projects/F202415137CPCAA0/small_pel_geofiltering/modelling_all_spp/results_ap_bg_in_ca"
+out_ca   <- "/projects/F202415137CPCAA0/small_pel_geofiltering/modelling_all_spp/buffer_area_bg_in_ca"
+out_bg   <- "/projects/F202415137CPCAA0/small_pel_geofiltering/modelling_all_spp/background_bg_in_ca"
+
+dir.create(out_path, showWarnings = FALSE, recursive = TRUE)
+dir.create(out_ca, showWarnings = FALSE, recursive = TRUE)
+dir.create(out_bg, showWarnings = FALSE, recursive = TRUE)
+
+###############################################################################
+# 2. LOAD DATA
+###############################################################################
+
+cat("Loading occurrence data...\n")
+
+df <- read.csv(occ_file)
+
+cat("Total records:", nrow(df), "\n")
+
+###############################################################################
+# 3. LOAD ENVIRONMENTAL PREDICTORS
+###############################################################################
+
+cat("Loading predictor raster...\n")
+
+predictors <- terra::rast(tif_path)
+
+cat("Predictor raster has", nlyr(predictors), "layers\n")
+
+###############################################################################
+# 4. GET UNIQUE SPECIES
+###############################################################################
+
+species_list <- unique(df$species)
+
+cat("Found", length(species_list), "species\n")
+
+###############################################################################
+# 5. LOOP THROUGH SPECIES
+###############################################################################
+
+for (sp_name in species_list) {
+
+  cat("\n=================================================\n")
+  cat("Processing species:", sp_name, "\n")
+  cat("=================================================\n")
+
+  try({
+
+    ###########################################################################
+    # FILTER OCCURRENCES
+    ###########################################################################
+
+    spp <- df %>%
+      filter(species == sp_name)
+
+    cat("Occurrences:", nrow(spp), "\n")
+
+    if (nrow(spp) < 20) {
+      cat("Skipped — too few records\n")
+      next
+    }
+
+    ###########################################################################
+    # CREATE CALIBRATION AREA
+    ###########################################################################
+
+    ca <- flexsdm::calib_area(
+      data = spp,
+      x = "lon",
+      y = "lat",
+      method = c("buffer", width = 1000000),
+      crs = "EPSG:4326"
+    )
+
+    ca_file <- file.path(out_ca,
+                         paste0(sp_name, "_calibration_area.gpkg"))
+
+    terra::writeVector(ca, ca_file, overwrite = TRUE)
+
+    ###########################################################################
+    # SAMPLE BACKGROUND (10,000 POINTS)
+    ###########################################################################
+
+    set.seed(10)
+
+    bg <- flexsdm::sample_background(
+      data = spp,
+      x = "lon",
+      y = "lat",
+      n = 10000,
+      method = "random",
+      rlayer = predictors,
+      calibarea = ca
+    ) %>%
+      mutate(pa = 0)
+
+    bg_file <- file.path(out_bg,
+                         paste0(sp_name, "_background.csv"))
+
+    write.csv(bg, bg_file, row.names = FALSE)
+
+    ###########################################################################
+    # PREPARE PRESENCE DATA
+    ###########################################################################
+
+    pres <- spp %>%
+      rename(x = lon,
+             y = lat) %>%
+      mutate(pa = 1) %>%
+      select(pa, x, y)
+
+    ###########################################################################
+    # COMBINE PRESENCE + BACKGROUND
+    ###########################################################################
+
+    model_df <- bind_rows(
+      pres,
+      bg %>% select(pa, x, y)
+    )
+
+    cat("Total modelling records:", nrow(model_df), "\n")
+
+    ###########################################################################
+    # BUILD SDM DATA OBJECT
+    ###########################################################################
+
+    sdm_data <- sdm::sdmData(
+      pa ~ . + coords(x + y),
+      train = model_df,
+      predictors = predictors
+    )
+
+    ###########################################################################
+    # RUN MODELS
+    ###########################################################################
+
+    cat("Running SDM models...\n")
+
+    m_species <- sdm::sdm(
+      pa ~ . + coords(x + y),
+      data   = sdm_data,
+      methods = c("brt", "gam", "glm",
+                  "maxent", "maxlike", "mlp",
+                  "rf", "rpart", "svm"),
+      replication = "sub",
+      test.p      = 30,
+      n           = 50,
+      parallelSetting = list(
+        ncore  = 7,
+        method = "parallel",
+        fork   = FALSE
+      )
+    )
+
+    ###########################################################################
+    # SAVE MODEL
+    ###########################################################################
+
+    saveRDS(
+      m_species,
+      file = file.path(out_path,
+                       paste0(sp_name, "_sdmmodel_bg.rds"))
+    )
+
+    cat("Completed:", sp_name, "\n")
+
+  }, silent = FALSE)
+
+}
