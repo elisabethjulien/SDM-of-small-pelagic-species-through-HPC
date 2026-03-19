@@ -1,0 +1,26 @@
+# Load libraries
+library(sdm)
+library(ggplot2)
+
+# Load model
+m <- readRDS("D:/maria sol/Clupea_pallasii_sdmmodel_ap.rds")
+
+# Extract variable importance and plot
+vi <- getVarImp(m)
+plot(vi)
+
+# Custom plot (mean + uncertainty)
+
+# Extract mean importance
+vi_mean <- vi@varImportanceMean$corTest
+# Create plot
+ggplot(vi_mean, aes(x = reorder(variables, corTest),
+                    y = corTest)) +
+  geom_col(fill = "mediumpurple") +
+  geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.2) +
+  coord_flip() +
+  theme_minimal() +
+  labs(title = "Variable Importance",
+       subtitle = "Clupea pallasii",
+       x = "",
+       y = "Importance (corTest)")
