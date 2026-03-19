@@ -1,7 +1,9 @@
 #!/usr/bin/env Rscript
 ###############################################################################
 # HPC Species Distribution Modelling – ALL SPECIES
-# Presence + Background (10,000 points within calibration buffer)
+# BG models: presence + background
+# PA models: presence + pseudoabsence
+# Includes evaluation and variable importance extraction
 ###############################################################################
 
 cat("Using sdm version:", paste(packageVersion("sdm")), "\n")
@@ -14,19 +16,23 @@ library(dplyr)
 installAll()
 
 ###############################################################################
-# 1. DEFINE PATHS
+# 1. PATHS
 ###############################################################################
 
-occ_file <- "/projects/F202415137CPCAA0/small_pel_geofiltering/modelling_all_spp/occurrence_dfs/ap_species.csv"
+occ_file <- "/projects/F202415137CPCAA0/small_pel_geofiltering/modelling_all_spp/occurrence_dfs/all_spp_nativerangefiltered_ap.csv"
 tif_path <- "/projects/F202415137CPCAA0/small_pel_geofiltering/present.tif"
 
-out_path <- "/projects/F202415137CPCAA0/small_pel_geofiltering/modelling_all_spp/results_ap_bg_in_ca"
-out_ca   <- "/projects/F202415137CPCAA0/small_pel_geofiltering/modelling_all_spp/buffer_area_bg_in_ca"
-out_bg   <- "/projects/F202415137CPCAA0/small_pel_geofiltering/modelling_all_spp/background_bg_in_ca"
+out_path <- "/projects/F202415137CPCAA0/small_pel_geofiltering/modelling_all_spp/results_serious_run"
+out_ca   <- "/projects/F202415137CPCAA0/small_pel_geofiltering/modelling_all_spp/buffer_area_serious_run"
+out_bg   <- "/projects/F202415137CPCAA0/small_pel_geofiltering/modelling_all_spp/background_serious_run"
+out_psa  <- "/projects/F202415137CPCAA0/small_pel_geofiltering/modelling_all_spp/pseudoabsence_serious_run"
+out_eval <- file.path(out_path, "evaluation")
 
-dir.create(out_path, showWarnings = FALSE, recursive = TRUE)
-dir.create(out_ca, showWarnings = FALSE, recursive = TRUE)
-dir.create(out_bg, showWarnings = FALSE, recursive = TRUE)
+dir.create(out_path, showWarnings=FALSE, recursive=TRUE)
+dir.create(out_ca, showWarnings=FALSE, recursive=TRUE)
+dir.create(out_bg, showWarnings=FALSE, recursive=TRUE)
+dir.create(out_psa, showWarnings=FALSE, recursive=TRUE)
+dir.create(out_eval, showWarnings=FALSE, recursive=TRUE)
 
 ###############################################################################
 # 2. LOAD DATA
@@ -38,18 +44,14 @@ df <- read.csv(occ_file)
 
 cat("Total records:", nrow(df), "\n")
 
-###############################################################################
-# 3. LOAD ENVIRONMENTAL PREDICTORS
-###############################################################################
-
 cat("Loading predictor raster...\n")
 
 predictors <- terra::rast(tif_path)
 
-cat("Predictor raster has", nlyr(predictors), "layers\n")
+cat("Predictor raster has", terra::nlyr(predictors), "layers\n")
 
 ###############################################################################
-# 4. GET UNIQUE SPECIES
+# 3. SPECIES LIST
 ###############################################################################
 
 species_list <- unique(df$species)
@@ -57,135 +59,268 @@ species_list <- unique(df$species)
 cat("Found", length(species_list), "species\n")
 
 ###############################################################################
-# 5. LOOP THROUGH SPECIES
+# 4. FUNCTIONS
 ###############################################################################
 
-for (sp_name in species_list) {
+extract_eval <- function(model, species_name, model_type){
 
-  cat("\n=================================================\n")
-  cat("Processing species:", sp_name, "\n")
-  cat("=================================================\n")
+  info <- getModelInfo(model)
 
-  try({
+  ids <- info$modelID
 
-    ###########################################################################
-    # FILTER OCCURRENCES
-    ###########################################################################
+  ev_list <- lapply(ids, function(i){
+    tryCatch(
+      getEvaluation(model, id=i, stat=c("AUC","TSS")),
+      error=function(e) NULL
+    )
+  })
 
-    spp <- df %>%
-      filter(species == sp_name)
+  ev_list <- ev_list[!sapply(ev_list,is.null)]
 
-    cat("Occurrences:", nrow(spp), "\n")
+  if(length(ev_list)==0) return(NULL)
 
-    if (nrow(spp) < 20) {
-      cat("Skipped — too few records\n")
-      next
-    }
+  ev <- do.call(rbind, ev_list)
 
-    ###########################################################################
-    # CREATE CALIBRATION AREA
-    ###########################################################################
+  ev_full <- merge(ev,
+                   info[,c("modelID","method")],
+                   by="modelID")
 
-    ca <- flexsdm::calib_area(
-      data = spp,
-      x = "lon",
-      y = "lat",
-      method = c("buffer", width = 1000000),
-      crs = "EPSG:4326"
+  summary_table <- ev_full %>%
+    group_by(method) %>%
+    summarise(
+      mean_AUC = mean(AUC, na.rm=TRUE),
+      mean_TSS = mean(TSS, na.rm=TRUE),
+      .groups="drop"
     )
 
-    ca_file <- file.path(out_ca,
-                         paste0(sp_name, "_calibration_area.gpkg"))
+  summary_table$species <- species_name
+  summary_table$model_type <- model_type
 
-    terra::writeVector(ca, ca_file, overwrite = TRUE)
+  return(summary_table)
+}
 
-    ###########################################################################
-    # SAMPLE BACKGROUND (10,000 POINTS)
-    ###########################################################################
 
-    set.seed(10)
+extract_varimp <- function(model, species_name, model_type){
 
-    bg <- flexsdm::sample_background(
-      data = spp,
-      x = "lon",
-      y = "lat",
-      n = 10000,
-      method = "random",
-      rlayer = predictors,
-      calibarea = ca
-    ) %>%
-      mutate(pa = 0)
+  info <- getModelInfo(model)
 
-    bg_file <- file.path(out_bg,
-                         paste0(sp_name, "_background.csv"))
+  ids <- info$modelID
 
-    write.csv(bg, bg_file, row.names = FALSE)
-
-    ###########################################################################
-    # PREPARE PRESENCE DATA
-    ###########################################################################
-
-    pres <- spp %>%
-      rename(x = lon,
-             y = lat) %>%
-      mutate(pa = 1) %>%
-      select(pa, x, y)
-
-    ###########################################################################
-    # COMBINE PRESENCE + BACKGROUND
-    ###########################################################################
-
-    model_df <- bind_rows(
-      pres,
-      bg %>% select(pa, x, y)
+  vi_list <- lapply(ids, function(i){
+    tryCatch(
+      getVarImp(model, id=i),
+      error=function(e) NULL
     )
+  })
 
-    cat("Total modelling records:", nrow(model_df), "\n")
+  vi_list <- vi_list[!sapply(vi_list,is.null)]
 
-    ###########################################################################
-    # BUILD SDM DATA OBJECT
-    ###########################################################################
+  if(length(vi_list)==0) return(NULL)
 
-    sdm_data <- sdm::sdmData(
-      pa ~ . + coords(x + y),
-      train = model_df,
-      predictors = predictors
-    )
+vi <- do.call(rbind, lapply(vi_list, as.data.frame))
 
-    ###########################################################################
-    # RUN MODELS
-    ###########################################################################
+  vi$species <- species_name
+  vi$model_type <- model_type
 
-    cat("Running SDM models...\n")
+  return(vi)
+}
 
-    m_species <- sdm::sdm(
-      pa ~ . + coords(x + y),
-      data   = sdm_data,
-      methods = c("brt", "gam", "glm",
-                  "maxent", "maxlike", "mlp",
-                  "rf", "rpart", "svm"),
-      replication = "sub",
-      test.p      = 30,
-      n           = 50,
-      parallelSetting = list(
-        ncore  = 7,
-        method = "parallel",
-        fork   = FALSE
-      )
-    )
+###############################################################################
+# 5. SPECIES LOOP
+###############################################################################
 
-    ###########################################################################
-    # SAVE MODEL
-    ###########################################################################
+for(sp_name in species_list){
 
-    saveRDS(
-      m_species,
-      file = file.path(out_path,
-                       paste0(sp_name, "_sdmmodel_bg.rds"))
-    )
+cat("\n=================================================\n")
+cat("Processing species:", sp_name,"\n")
+cat("=================================================\n")
 
-    cat("Completed:", sp_name, "\n")
+try({
 
-  }, silent = FALSE)
+###############################################################################
+# OCCURRENCES
+###############################################################################
+
+spp <- df %>% filter(species==sp_name)
+
+cat("Occurrences:", nrow(spp),"\n")
+
+if(nrow(spp)<20){
+cat("Skipped — too few records\n")
+next
+}
+
+###############################################################################
+# CALIBRATION AREA
+###############################################################################
+
+ca <- flexsdm::calib_area(
+data=spp,
+x="lon",
+y="lat",
+method=c("buffer", width=1000000),
+crs="EPSG:4326"
+)
+
+ca <- terra::project(ca, terra::crs(predictors))
+
+terra::writeVector(
+ca,
+file.path(out_ca,paste0(sp_name,"_calibration_area.gpkg")),
+overwrite=TRUE
+)
+
+###############################################################################
+# BACKGROUND
+###############################################################################
+
+set.seed(10)
+
+bg <- flexsdm::sample_background(
+data=spp,
+x="lon",
+y="lat",
+n=10000,
+method="random",
+rlayer=predictors,
+calibarea=ca
+) %>%
+rename(x=lon,y=lat) %>%
+mutate(pa=0)
+
+write.csv(
+bg,
+file.path(out_bg,paste0(sp_name,"_background.csv")),
+row.names=FALSE
+)
+
+###############################################################################
+# PSEUDOABSENCE
+###############################################################################
+
+set.seed(10)
+
+psa <- flexsdm::sample_pseudoabs(
+data=spp,
+x="lon",
+y="lat",
+n=2*nrow(spp),
+method="random",
+rlayer=predictors,
+calibarea=ca
+) %>%
+dplyr::rename(x=lon,y=lat) %>%
+dplyr::mutate(pa=0)
+
+write.csv(
+psa,
+file.path(out_psa,paste0(sp_name,"_pseudoabsence.csv")),
+row.names=FALSE
+)
+
+###############################################################################
+# PRESENCE DATA
+###############################################################################
+
+pres <- spp %>%
+dplyr::rename(x=lon,y=lat) %>%
+dplyr::mutate(pa=1) %>%
+dplyr::select(pa,x,y)
+
+###############################################################################
+# DATASETS
+###############################################################################
+
+model_bg <- dplyr::bind_rows(pres, bg %>% dplyr::select(pa,x,y))
+model_psa <- dplyr::bind_rows(pres, psa %>% dplyr::select(pa,x,y))
+
+###############################################################################
+# SDM DATA
+###############################################################################
+
+sdm_bg <- sdmData(pa~.+coords(x+y),train=model_bg,predictors=predictors)
+
+sdm_psa <- sdmData(pa~.+coords(x+y),train=model_psa,predictors=predictors)
+
+###############################################################################
+# BACKGROUND MODELS
+###############################################################################
+
+cat("Running BG models...\n")
+
+m_bg <- sdm(
+pa~.+coords(x+y),
+data=sdm_bg,
+methods=c(
+"maxent",
+"maxlike",
+"bioclim",
+"bioclim.dismo",
+"domain.dismo",
+"mahal.dismo"
+),
+replication="sub",
+test.p=30,
+n=50,
+parallelSetting=list(ncore=7,method="parallel",fork=FALSE)
+)
+
+###############################################################################
+# PSEUDOABSENCE MODELS
+###############################################################################
+
+cat("Running PA models...\n")
+
+m_psa <- sdm(
+pa~.+coords(x+y),
+data=sdm_psa,
+methods=c(
+"brt","gam","glm","mlp","rf","rpart","svm",
+"cart","fda","glmnet","mars","mda","rbf"
+),
+replication="sub",
+test.p=30,
+n=50,
+parallelSetting=list(ncore=7,method="parallel",fork=FALSE)
+)
+
+###############################################################################
+# EVALUATION
+###############################################################################
+
+cat("Evaluating models...\n")
+
+eval_bg  <- extract_eval(m_bg,sp_name,"background")
+eval_psa <- extract_eval(m_psa,sp_name,"pseudoabsence")
+
+eval_all <- bind_rows(eval_bg,eval_psa)
+
+if(!is.null(eval_all)){
+
+write.csv(
+eval_all,
+file=file.path(out_eval,paste0(sp_name,"_evaluation.csv")),
+row.names=FALSE
+)
+
+}
+
+###############################################################################
+# SAVE MODELS
+###############################################################################
+
+saveRDS(
+m_bg,
+file=file.path(out_path,paste0(sp_name,"_sdm_BG_models.rds"))
+)
+
+saveRDS(
+m_psa,
+file=file.path(out_path,paste0(sp_name,"_sdm_PSA_models.rds"))
+)
+
+cat("Completed:",sp_name,"\n")
+
+}, silent=FALSE)
 
 }
