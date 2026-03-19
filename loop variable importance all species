@@ -1,0 +1,69 @@
+library(sdm)
+
+# Folder with all models
+model_path <- "path_to_your_models_folder"
+
+# List all .rds files
+model_files <- list.files(model_path, pattern = "\\.rds$", full.names = TRUE)
+
+# Loop through species
+for (file in model_files) {
+  
+  m <- readRDS(file)
+  vi <- getVarImp(m)
+  
+  species_name <- tools::file_path_sans_ext(basename(file))
+  
+  cat("Processing:", species_name, "\n")
+  
+  # Save default plot
+  png(paste0(species_name, "_VI_default.png"), width = 800, height = 600)
+  plot(vi, main = paste("Variable Importance -", species_name))
+  dev.off()
+}
+
+############################################################
+# Variable Importance - Custom Plot for ALL Species
+############################################################
+
+library(sdm)
+library(ggplot2)
+
+# Folder with all models
+model_path <- "path_to_your_models_folder"
+
+# List all .rds files
+model_files <- list.files(model_path, pattern = "\\.rds$", full.names = TRUE)
+
+# Loop through species
+for (file in model_files) {
+  
+  m <- readRDS(file)
+  vi <- getVarImp(m)
+  
+  # Extract mean importance
+  vi_mean <- vi@varImportanceMean$corTest
+  
+  species_name <- tools::file_path_sans_ext(basename(file))
+  
+  cat("Processing:", species_name, "\n")
+  
+  # Create plot
+  p <- ggplot(vi_mean, aes(x = reorder(variables, corTest),
+                           y = corTest)) +
+    geom_col(fill = "mediumpurple") +
+    geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.2) +
+    coord_flip() +
+    theme_minimal() +
+    labs(title = "Variable Importance",
+         subtitle = species_name,
+         x = "",
+         y = "Importance (corTest)")
+  
+  # Save plot
+  ggsave(paste0(species_name, "_VI_custom.png"),
+         plot = p,
+         width = 7,
+         height = 5,
+         dpi = 300)
+}
