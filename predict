@@ -1,0 +1,265 @@
+# ── LIBRARIES ─────────────────────────────────────────────────────────────────
+library(terra)
+library(sdm)
+library(dplyr)
+library(future)
+library(furrr)
+
+# ── PATHS ─────────────────────────────────────────────────────────────────────
+raster_path <- "C:/Users/Admin/Downloads/present.tif"
+file_bg     <- "C:/Users/Admin/Downloads/Sardinella_lemuru_sdm_PSA_models.rds"
+out_dir     <- "C:/Users/Admin/Desktop/smallpel/pred_bg_tiles_sarlem"
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+
+# ── MODEL ─────────────────────────────────────────────────────────────────────
+m_bg   <- readRDS(file_bg)
+ids_bg <- getModelInfo(m_bg) %>% filter(method == "rf") %>% pull(modelID)
+cat("rf models found:", length(ids_bg), "\n")  # must show 50
+
+# ── TILE GRID ─────────────────────────────────────────────────────────────────
+r        <- rast(raster_path)
+ext_full <- ext(r)
+rm(r)
+
+n_tiles_x <- 6
+n_tiles_y <- 4
+x_breaks  <- seq(ext_full$xmin, ext_full$xmax, length.out = n_tiles_x + 1)
+y_breaks  <- seq(ext_full$ymin, ext_full$ymax, length.out = n_tiles_y + 1)
+set.seed(1)
+tile_grid <- expand.grid(i = seq_len(n_tiles_x), j = seq_len(n_tiles_y))
+tile_grid <- tile_grid[sample(nrow(tile_grid)), ]
+
+# ── TEST PREDICT IN MAIN SESSION FIRST ────────────────────────────────────────
+# The correct argument is `id`, not `models`
+# Call the S4 method body directly to bypass terra's masking of the generic
+sdm_method <- findMethods("predict", classes = "sdmModels")$sdmModels
+
+r_worker  <- rast(raster_path)
+r_tile    <- crop(r_worker, ext(x_breaks[1], x_breaks[2], y_breaks[1], y_breaks[2]))
+rm(r_worker)
+
+cat("Testing predict on tile 1 — stop here if this errors\n")
+system.time({
+  pred_test <- sdm_method(m_bg, newdata = r_tile, id = ids_bg)
+})
+pred_test  # should print a SpatRaster with 50 layers
+
+# ── STOP HERE AND PASTE pred_test OUTPUT BEFORE RUNNING BELOW ─────────────────
+
+worker_fn(tile_grid$i[1], tile_grid$j[1])
+
+purrr::walk2(
+  tile_grid$i,
+  tile_grid$j,
+  worker_fn
+)
+
+# ── PARALLEL RUN ──────────────────────────────────────────────────────────────
+worker_fn <- function(i, j) {
+  library(terra)
+  library(sdm)
+  library(dplyr)
+  
+  tile_id  <- sprintf("tile_%02d_%02d", i, j)
+  out_file <- file.path(out_dir, paste0("rf_", tile_id, ".tif"))
+  if (file.exists(out_file)) return(invisible(NULL))
+  
+  # Load model fresh — avoids serializing externalptr across sessions
+  m_local    <- readRDS(file_bg)
+  ids_local  <- getModelInfo(m_local) %>% filter(method == "rf") %>% pull(modelID)
+  sdm_method <- findMethods("predict", classes = "sdmModels")$sdmModels
+  
+  r_tile <- tryCatch(
+    crop(rast(raster_path), ext(x_breaks[i], x_breaks[i+1], y_breaks[j], y_breaks[j+1])),
+    error = function(e) NULL
+  )
+  if (is.null(r_tile) || ncell(r_tile) == 0) return(invisible(NULL))
+  
+  pred <- tryCatch(
+    sdm_method(m_local, newdata = r_tile, id = ids_local),
+    error = function(e) { message(tile_id, " failed: ", e$message); NULL }
+  )
+  
+  if (!is.null(pred))
+    writeRaster(pred, out_file, overwrite = TRUE,
+                gdal = c("COMPRESS=DEFLATE", "PREDICTOR=2"))
+  
+  rm(r_tile, m_local, pred); gc()
+  invisible(NULL)
+}
+
+plan(multisession, workers = 8, rscript_libs = .libPaths())
+
+future_walk2(
+  tile_grid$i, tile_grid$j, worker_fn,
+  .options = furrr_options(
+    globals = c("raster_path", "file_bg", "out_dir", "x_breaks", "y_breaks"),
+    seed = TRUE
+  )
+)
+
+plan(sequential)
+
+# ── MERGE TILES ────────────────────────────────────────────────────────────────
+
+tile_files <- list.files(
+  out_dir,
+  pattern = "^rf_tile.*\\.tif$",
+  full.names = TRUE
+)
+
+cat("Tiles found:", length(tile_files), "of", nrow(tile_grid), "\n")
+
+if (length(tile_files) == nrow(tile_grid)) {
+  
+  # Read all predicted tiles
+  preds <- lapply(tile_files, rast)
+  
+  # Merge adjacent tiles
+  merged_r <- do.call(merge, preds)
+  
+  # Write merged raster
+  writeRaster(
+    merged_r,
+    file.path(out_dir, "sarlem_rf_predicted.tif"),
+    overwrite = TRUE,
+    gdal = c("COMPRESS=DEFLATE", "PREDICTOR=2")
+  )
+  
+  message("Merged raster written.")
+  
+} else {
+  
+  message("Not all tiles are present. Merge skipped.")
+  
+}
+
+#check
+checkpath<-"C:/Users/Admin/Desktop/smallpel/pred_bg_tiles_sarlem/sarlem_rf_predicted.tif"
+gr<-raster(checkpath)
+plot(gr)
+#perf
+
+
+#next method
+
+# ── MODEL ─────────────────────────────────────────────────────────────────────
+m_bg   <- readRDS(file_bg)
+ids_bg <- getModelInfo(m_bg) %>% filter(method == "brt") %>% pull(modelID)
+cat("brt models found:", length(ids_bg), "\n")  # must show 50
+
+# ── TILE GRID ─────────────────────────────────────────────────────────────────
+r        <- rast(raster_path)
+ext_full <- ext(r)
+rm(r)
+
+n_tiles_x <- 6
+n_tiles_y <- 4
+x_breaks  <- seq(ext_full$xmin, ext_full$xmax, length.out = n_tiles_x + 1)
+y_breaks  <- seq(ext_full$ymin, ext_full$ymax, length.out = n_tiles_y + 1)
+set.seed(1)
+tile_grid <- expand.grid(i = seq_len(n_tiles_x), j = seq_len(n_tiles_y))
+tile_grid <- tile_grid[sample(nrow(tile_grid)), ]
+
+# ── TEST PREDICT IN MAIN SESSION FIRST ────────────────────────────────────────
+# The correct argument is `id`, not `models`
+# Call the S4 method body directly to bypass terra's masking of the generic
+sdm_method <- findMethods("predict", classes = "sdmModels")$sdmModels
+
+r_worker  <- rast(raster_path)
+r_tile    <- crop(r_worker, ext(x_breaks[1], x_breaks[2], y_breaks[1], y_breaks[2]))
+rm(r_worker)
+
+
+worker_fn(tile_grid$i[1], tile_grid$j[1])
+
+purrr::walk2(
+  tile_grid$i,
+  tile_grid$j,
+  worker_fn
+)
+
+# ── PARALLEL RUN ──────────────────────────────────────────────────────────────
+worker_fn <- function(i, j) {
+  library(terra)
+  library(sdm)
+  library(dplyr)
+  
+  tile_id  <- sprintf("tile_%02d_%02d", i, j)
+  out_file <- file.path(out_dir, paste0("brt_", tile_id, ".tif"))
+  if (file.exists(out_file)) return(invisible(NULL))
+  
+  # Load model fresh — avoids serializing externalptr across sessions
+  m_local    <- readRDS(file_bg)
+  ids_local  <- getModelInfo(m_local) %>% filter(method == "rf") %>% pull(modelID)
+  sdm_method <- findMethods("predict", classes = "sdmModels")$sdmModels
+  
+  r_tile <- tryCatch(
+    crop(rast(raster_path), ext(x_breaks[i], x_breaks[i+1], y_breaks[j], y_breaks[j+1])),
+    error = function(e) NULL
+  )
+  if (is.null(r_tile) || ncell(r_tile) == 0) return(invisible(NULL))
+  
+  pred <- tryCatch(
+    sdm_method(m_local, newdata = r_tile, id = ids_local),
+    error = function(e) { message(tile_id, " failed: ", e$message); NULL }
+  )
+  
+  if (!is.null(pred))
+    writeRaster(pred, out_file, overwrite = TRUE,
+                gdal = c("COMPRESS=DEFLATE", "PREDICTOR=2"))
+  
+  rm(r_tile, m_local, pred); gc()
+  invisible(NULL)
+}
+
+plan(multisession, workers = 8, rscript_libs = .libPaths())
+
+future_walk2(
+  tile_grid$i, tile_grid$j, worker_fn,
+  .options = furrr_options(
+    globals = c("raster_path", "file_bg", "out_dir", "x_breaks", "y_breaks"),
+    seed = TRUE
+  )
+)
+
+plan(sequential)
+
+# ── MERGE TILES ────────────────────────────────────────────────────────────────
+
+tile_files <- list.files(
+  out_dir,
+  pattern = "^brt_tile.*\\.tif$",
+  full.names = TRUE
+)
+
+cat("Tiles found:", length(tile_files), "of", nrow(tile_grid), "\n")
+
+if (length(tile_files) == nrow(tile_grid)) {
+  
+  # Read all predicted tiles
+  preds <- lapply(tile_files, rast)
+  
+  # Merge adjacent tiles
+  merged_r <- do.call(merge, preds)
+  
+  # Write merged raster
+  writeRaster(
+    merged_r,
+    file.path(out_dir, "sarlem_brt_predicted.tif"),
+    overwrite = TRUE,
+    gdal = c("COMPRESS=DEFLATE", "PREDICTOR=2")
+  )
+  
+  message("Merged raster written.")
+  
+} else {
+  
+  message("Not all tiles are present. Merge skipped.")
+  
+}
+#check
+checkpath<-"C:/Users/Admin/Desktop/smallpel/pred_bg_tiles_sarlem/sarlem_brt_predicted.tif"
+gr<-raster(checkpath)
+plot(gr)
+#perf
